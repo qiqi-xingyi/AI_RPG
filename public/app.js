@@ -1,3 +1,6 @@
+import { takeAccessLink } from './access-link.js';
+let accessLink, accessLinkError;
+try { accessLink = takeAccessLink(window.location, window.history); } catch (error) { accessLinkError = error; }
 const $ = selector => document.querySelector(selector);
 const app = $('#app');
 const modal = $('#modal');
@@ -57,7 +60,7 @@ function persist() {
 const worldOf = id => state.config.worlds.find(w => w.id === id);
 const roleOf = id => state.config.roles.find(r => r.id === id);
 const paragraphs = value => String(value).split(/\n+/).filter(Boolean).map(p => `<p>${esc(p)}</p>`).join('');
-const modeBadge = () => `<span class="mode-badge live"><span class="status-dot"></span>AI 主持</span>`;
+const modeBadge = () => `<span class="mode-badge live"><span class="status-dot"></span>AI 主持${state.config?.playtest?.access === 'owner' ? ' · 专属游玩' : ''}</span>`;
 
 function sidebar() {
   return `<aside class="sidebar">
@@ -70,7 +73,7 @@ function sidebar() {
   </aside>`;
 }
 function header() {
-  return `<header class="topbar"><div class="breadcrumbs"><span class="mobile-brand">✧ 星叙</span><span class="desktop-crumb">你的冒险空间</span><span class="crumb-divider">/</span><strong>${state.screen === 'story' ? '当前旅途' : '冒险大厅'}</strong></div><div class="topbar-right"><button class="quiet-button mobile-saves" data-action="saves" aria-label="我的故事">${icon('book')}</button><span class="topbar-note">一人，一骰，无限可能</span><button class="avatar-button" data-action="settings" aria-label="游玩指南">${icon('spark')}</button></div></header>`;
+  return `<header class="topbar"><div class="breadcrumbs"><span class="mobile-brand">✧ 星叙</span><span class="desktop-crumb">你的冒险空间</span><span class="crumb-divider">/</span><strong>${state.screen === 'story' ? '当前旅途' : '冒险大厅'}</strong></div><div class="topbar-right"><button class="quiet-button mobile-saves" data-action="saves" aria-label="我的故事">${icon('book')}</button><span class="topbar-note">${state.config.playtest?.access === 'owner' ? '专属游玩 · AI 无次数限制' : '一人，一骰，无限可能'}</span><button class="avatar-button" data-action="settings" aria-label="游玩指南">${icon('spark')}</button></div></header>`;
 }
 function home() {
   return `<div class="home-view">
@@ -336,7 +339,14 @@ document.addEventListener('change', async event => {
 });
 modal.addEventListener('cancel', event => { if (state.busy) event.preventDefault(); });
 async function boot() {
-  try { state.config = await api('/api/config'); render(); }
+  try {
+    if (accessLinkError) throw accessLinkError;
+    if (accessLink) {
+      await api(accessLink.path, { method: 'POST', body: JSON.stringify(accessLink.data) });
+      accessLink = null;
+    }
+    state.config = await api('/api/config'); render();
+  }
   catch (error) { app.innerHTML = `<div class="boot"><span class="boot-star">✧</span><h1>故事暂时还未展开</h1><p>${esc(error.message)}</p><button id="retry" class="primary-button">重新连接 ${icon('arrow')}</button></div>`; $('#retry').onclick = boot; }
 }
 boot();

@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { catalog } from '../lib/catalog.mjs';
 import { GameError, newSession, publicSession, prepareAction, applyOpening, applyTurn, prepareContinuation, applyContinuation } from '../lib/game.mjs';
 import { createDeepSeek } from '../lib/deepseek.mjs';
@@ -19,8 +19,10 @@ function signature(value, key) { return createHmac('sha256', key).update(value).
 function signingKey(env) {
   return env.TRIAL_SIGNING_KEY || (env.DEEPSEEK_API_KEY ? createHmac('sha256', env.DEEPSEEK_API_KEY).update('storybound.trial.cookie.v1').digest('hex') : null);
 }
-function signedCookie(id, env) {
-  const data = Buffer.from(JSON.stringify({ id, exp: Date.now() + COOKIE_AGE * 1000 })).toString('base64url');
+function signedCookie(visitor, env) {
+  const data = Buffer.from(JSON.stringify({ id: visitor.id, role: visitor.role,
+    ...(visitor.role === 'owner' ? { ownerVersion: env.OWNER_ACCESS_TOKEN_HASH } : {}),
+    exp: Date.now() + COOKIE_AGE * 1000 })).toString('base64url');
   return `${COOKIE}=${data}.${signature(data, signingKey(env))}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${COOKIE_AGE}`;
 }
 function visitorOf(request, env) {
@@ -29,7 +31,14 @@ function visitorOf(request, env) {
   if (!value || value.length > 512) return null;
   const [data, mac, extra] = value.split('.');
   if (!data || !mac || extra || !safeEqual(mac, signature(data, signingKey(env)))) return null;
-  try { const parsed = JSON.parse(Buffer.from(data, 'base64url').toString()); return /^[a-f0-9-]{36}$/.test(parsed.id) && Number.isFinite(parsed.exp) && parsed.exp > Date.now() ? parsed.id : null; }
+  try {
+    const parsed = JSON.parse(Buffer.from(data, 'base64url').toString());
+    if (!/^[a-f0-9-]{36}$/.test(parsed.id) || !Number.isFinite(parsed.exp) || parsed.exp <= Date.now()) return null;
+    // Existing invitation cookies remain valid; only signed owner cookies can bypass quotas.
+    if (parsed.role === undefined || parsed.role === 'trial') return { id: parsed.id, role: 'trial' };
+    if (parsed.role === 'owner' && /^[a-f0-9]{64}$/.test(env.OWNER_ACCESS_TOKEN_HASH ?? '') && safeEqual(parsed.ownerVersion, env.OWNER_ACCESS_TOKEN_HASH)) return { id: parsed.id, role: 'owner' };
+    return null;
+  }
   catch { return null; }
 }
 function positiveInteger(value, fallback, maximum) { const n = Number(value ?? fallback); return Number.isInteger(n) && n > 0 ? Math.min(n, maximum) : fallback; }
@@ -49,12 +58,13 @@ function authenticate(request, session) {
   if (!session || !/^[a-f0-9]{64}$/.test(token ?? '') || !safeEqual(token, session.token)) throw new GameError('存档不存在或访问凭据已失效。', 404);
 }
 async function reserveGeneration(store, env, visitor) {
+  if (visitor.role === 'owner') return;
   const now = Date.now(), day = new Date(now).toISOString().slice(0, 10);
   const expires = now + 2 * 86400000;
   const personal = positiveInteger(env.PLAYTEST_USER_DAILY_LIMIT, 30, 100);
   const global = positiveInteger(env.PLAYTEST_GLOBAL_DAILY_LIMIT, 100, 1000);
   // Failed attempts still consume a reservation. Never refund a possibly paid call.
-  if (!await store.consume(`ai-user:${day}:${visitor}`, personal, expires)) throw new GameError('今天的试玩次数已用完，明天可以带着存档继续。', 429);
+  if (!await store.consume(`ai-user:${day}:${visitor.id}`, personal, expires)) throw new GameError('今天的试玩次数已用完，明天可以带着存档继续。', 429);
   if (!await store.consume(`ai-global:${day}`, global, expires)) throw new GameError('今天的试玩名额已用完，明天再来继续冒险吧。', 429);
 }
 export function createWorker(options = {}) {
@@ -75,23 +85,29 @@ export function createWorker(options = {}) {
         const visitor = visitorOf(request, env);
         if (request.method === 'GET' && path === '/api/config') {
           return json(200, { ...catalog(), rpg: rpgCatalog(), aiAvailable: !!env.DEEPSEEK_API_KEY, model: null,
-            playtest: { required: true, authorized: !!visitor, dailyLimit: positiveInteger(env.PLAYTEST_USER_DAILY_LIMIT, 30, 100) } });
+            playtest: { required: true, authorized: !!visitor, access: visitor?.role ?? null, dailyLimit: visitor?.role === 'owner' ? null : positiveInteger(env.PLAYTEST_USER_DAILY_LIMIT, 30, 100) } });
         }
         if (!env.DB || !env.PLAYTEST_CODE || !signingKey(env)) throw new GameError('试玩暂未开放，请稍后再试。', 503);
         const store = new CloudStore(env.DB);
-        if (request.method === 'POST' && path === '/api/playtest/login') {
+        if (request.method === 'POST' && ['/api/playtest/login', '/api/playtest/owner'].includes(path)) {
           const address = request.headers.get('cf-connecting-ip') || 'unknown';
           const ipHash = signature(address, signingKey(env)).slice(0, 24);
           const window = Math.floor(Date.now() / 600000);
           if (!await store.consume(`login:${ipHash}:${window}`, 10, Date.now() + 1200000)) throw new GameError('尝试太多，请十分钟后再试。', 429);
           const input = await inputOf(request);
+          if (path === '/api/playtest/owner') {
+            const validToken = typeof input.token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(input.token);
+            const hash = validToken ? createHash('sha256').update(input.token).digest('hex') : '';
+            if (!validToken || !/^[a-f0-9]{64}$/.test(env.OWNER_ACCESS_TOKEN_HASH ?? '') || !safeEqual(hash, env.OWNER_ACCESS_TOKEN_HASH)) throw new GameError('专属链接已失效，请使用完整链接重新进入。', 403);
+            return json(200, { ok: true }, { 'Set-Cookie': signedCookie({ id: visitor?.id || randomUUID(), role: 'owner' }, env) });
+          }
           if (typeof input.code !== 'string' || input.code.length > 80 || !safeEqual(input.code.trim(), env.PLAYTEST_CODE)) throw new GameError('邀请码不正确，请向邀请你的朋友确认。', 403);
-          return json(200, { ok: true }, { 'Set-Cookie': signedCookie(visitor || randomUUID(), env) });
+          return json(200, { ok: true }, { 'Set-Cookie': signedCookie(visitor || { id: randomUUID(), role: 'trial' }, env) });
         }
         if (!visitor) return json(401, { error: '请先输入试玩邀请码。', code: 'PLAYTEST_LOGIN_REQUIRED' });
         if (request.method === 'POST') {
           const minute = Math.floor(Date.now() / 60000);
-          if (!await store.consume(`actions:${visitor}:${minute}`, 25, Date.now() + 120000)) throw new GameError('行动太快啦，请稍候再试。', 429);
+          if (!await store.consume(`actions:${visitor.id}:${minute}`, 25, Date.now() + 120000)) throw new GameError('行动太快啦，请稍候再试。', 429);
         }
         const generate = options.provider ?? createDeepSeek({ apiKey: env.DEEPSEEK_API_KEY, model: env.DEEPSEEK_MODEL || 'deepseek-flash' });
         if (request.method === 'POST' && path === '/api/sessions') {
@@ -100,7 +116,7 @@ export function createWorker(options = {}) {
           const initial = newSession(input);
           await reserveGeneration(store, env, visitor);
           const session = applyOpening(initial, await generate(initial));
-          await store.create(session, visitor);
+          await store.create(session, visitor.id);
           if (ctx.waitUntil) ctx.waitUntil(store.cleanup().catch(() => {}));
           return json(201, { session: publicSession(session), token: session.token });
         }

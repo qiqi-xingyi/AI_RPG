@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { createWorker } from '../cloud/worker.mjs';
 import { demoTurn, WORLDS } from '../lib/catalog.mjs';
 class LocalD1 {
@@ -101,4 +101,67 @@ test('cloud trial safely derives cookie signing when only the provided API secre
   assert.equal((await f.request('/api/config',{cookie})).body.playtest.authorized,true);
   f.env.DEEPSEEK_API_KEY='rotated-test-api-key';
   assert.equal((await f.request('/api/config',{cookie})).body.playtest.authorized,false);
+});
+
+const accessHash = token => createHash('sha256').update(token).digest('hex');
+const ownerToken = 'A'.repeat(43);
+test('shareable dedicated access bypasses both AI quotas for opening, turns and continuation without charging friends', async t => {
+  const f = fixture(t, { OWNER_ACCESS_TOKEN_HASH: accessHash(ownerToken), PLAYTEST_USER_DAILY_LIMIT: '1', PLAYTEST_GLOBAL_DAILY_LIMIT: '1' });
+  const friend = await f.login();
+  assert.equal((await f.request('/api/sessions', { data: settings, cookie: friend })).status, 201);
+  assert.equal((await f.request('/api/sessions', { data: { ...settings, role: 'owner', unlimited: true }, cookie: friend })).status, 429);
+  const upgrade = await f.request('/api/playtest/owner', { data: { token: ownerToken }, cookie: friend });
+  assert.equal(upgrade.status, 200);
+  assert.match(upgrade.headers.get('set-cookie'), /HttpOnly; Secure; SameSite=Strict/);
+  const cookie = upgrade.cookie;
+  const config = (await f.request('/api/config', { cookie })).body;
+  assert.equal(config.playtest.access, 'owner'); assert.equal(config.playtest.dailyLimit, null);
+  for (const secret of [ownerToken, f.env.OWNER_ACCESS_TOKEN_HASH, f.env.DEEPSEEK_API_KEY]) assert.ok(!JSON.stringify(config).includes(secret));
+  const created = await f.request('/api/sessions', { data: settings, cookie });
+  assert.equal(created.status, 201);
+  const { session, token } = created.body;
+  const turn = await f.request('/api/sessions/' + session.id + '/turn', { data: { version: 0, action: '探索月光森林', skill: 'insight', requestId: randomUUID() }, cookie, token });
+  assert.equal(turn.status, 200);
+  const row = f.DB.db.prepare('SELECT state FROM game_sessions WHERE id=?').get(session.id);
+  const ended = JSON.parse(row.state); ended.ended = true;
+  f.DB.db.prepare('UPDATE game_sessions SET state=? WHERE id=?').run(JSON.stringify(ended), session.id);
+  const continuation = await f.request('/api/sessions/' + session.id + '/continue', { data: { version: 1, direction: '出发寻找母后', requestId: randomUUID() }, cookie, token });
+  assert.equal(continuation.status, 200); assert.equal(continuation.body.session.episode, 2);
+  // The same dedicated link works on an independent browser; saves still require their own credential.
+  const shared = await f.request('/api/playtest/owner', { data: { token: ownerToken } });
+  assert.equal(shared.status, 200); assert.notEqual(shared.cookie, cookie);
+  assert.equal((await f.request('/api/sessions', { data: settings, cookie: shared.cookie })).status, 201);
+  assert.equal((await f.request('/api/sessions/' + session.id, { cookie: shared.cookie })).status, 404);
+  const buckets = f.DB.db.prepare("SELECT bucket, used FROM usage_buckets WHERE bucket LIKE 'ai-%'").all();
+  assert.equal(buckets.find(b => b.bucket.startsWith('ai-global:')).used, 1);
+  assert.equal(buckets.filter(b => b.bucket.startsWith('ai-user:')).length, 1);
+  const relogin = await f.request('/api/playtest/login', { data: { code: f.env.PLAYTEST_CODE }, cookie });
+  assert.equal((await f.request('/api/config', { cookie: relogin.cookie })).body.playtest.access, 'owner');
+  assert.equal((await f.request('/api/sessions', { data: settings, cookie: await f.login() })).status, 429);
+});
+test('dedicated access rejects wrong tokens and forged roles, and token rotation revokes old links and cookies', async t => {
+  const f = fixture(t, { OWNER_ACCESS_TOKEN_HASH: accessHash(ownerToken) });
+  assert.equal((await f.request('/api/playtest/owner', { data: { token: 'B'.repeat(43) } })).status, 403);
+  assert.equal((await f.request('/api/playtest/owner', { data: { token: ownerToken, }, headers: { Origin: 'https://other.example' } })).status, 403);
+  const trial = await f.login();
+  const [nameAndData, mac] = trial.split('.');
+  const payload = JSON.parse(Buffer.from(nameAndData.split('=')[1], 'base64url').toString());
+  payload.role = 'owner'; payload.ownerVersion = f.env.OWNER_ACCESS_TOKEN_HASH;
+  const forged = nameAndData.split('=')[0] + '=' + Buffer.from(JSON.stringify(payload)).toString('base64url') + '.' + mac;
+  assert.equal((await f.request('/api/config', { cookie: forged })).body.playtest.authorized, false);
+  const login = await f.request('/api/playtest/owner', { data: { token: ownerToken } });
+  const cookie = login.cookie;
+  assert.equal((await f.request('/api/config', { cookie })).body.playtest.access, 'owner');
+  f.env.OWNER_ACCESS_TOKEN_HASH = accessHash('C'.repeat(43));
+  assert.equal((await f.request('/api/config', { cookie })).body.playtest.authorized, false);
+  assert.equal((await f.request('/api/playtest/owner', { data: { token: ownerToken } })).status, 403);
+  assert.equal((await f.request('/api/config', { cookie: trial })).body.playtest.access, 'trial');
+  assert.equal(f.calls(), 0);
+});
+test('old signed trial cookies remain compatible without granting dedicated access', async t => {
+  const f = fixture(t, { OWNER_ACCESS_TOKEN_HASH: accessHash(ownerToken) });
+  const data = Buffer.from(JSON.stringify({ id: randomUUID(), exp: Date.now() + 60000 })).toString('base64url');
+  const mac = createHmac('sha256', f.env.TRIAL_SIGNING_KEY).update(data).digest('base64url');
+  const config = (await f.request('/api/config', { cookie: '__Host-storybound-trial=' + data + '.' + mac })).body;
+  assert.equal(config.playtest.authorized, true); assert.equal(config.playtest.access, 'trial'); assert.equal(config.playtest.dailyLimit, 30);
 });

@@ -98,13 +98,17 @@ test/                 后端规则及 HTTP 集成测试
 
 本项目以 MIT 许可证开源，仓库：<https://github.com/qiqi-xingyi/AI_RPG>。
 
-在线朋友试玩：<https://storybound-rpg-qiqi.secret-lake-6654.chatgpt.site>。需要向项目主人索取邀请码，不能使用 GitHub 源码推导邀请码或 API Key。
+在线朋友试玩：<https://storybound-rpg-qiqi.secret-lake-6654.chatgpt.site>。需要向项目主人索取分享链接或邀请码，不能使用 GitHub 源码推导访问凭据或 API Key。
 
 GitHub 存放源码与空配置示例；`.env`、真实 API Key、个人 `data/` 存档、`artifacts/` 和 `.hosting/` 部署状态不会上传。发布前运行 `node scripts/check-secrets.mjs --staged`，检查即将提交的文件。
 
 在线版使用 `cloud/worker.mjs`，复用同一套公主角色、剧情、装备与战斗规则。云端 D1 保存存档和限额，不依赖本地电脑在线，也不公开本地玩家的历史。
 
 - 邀请码只用来进入试玩，绝不能把 DeepSeek Key 当作邀请码。
+- 朋友的一键分享链接格式为 `/#invite=邀请码`；专属入口格式为 `/#owner=随机访问凭据`。浏览器从 fragment 读取后立即清除地址中的凭据，再交换服务器签名的 HttpOnly cookie；凭据不进入页面请求 URL，也不写入浏览器存储。
+- 专属凭据应使用 32 字节安全随机数编码为 base64url，服务器只配置其 SHA-256 十六进制摘要 `OWNER_ACCESS_TOKEN_HASH`。完整专属链接可转发给授权的游玩者，不能提交到仓库。持有专属链接的人不受个人和全站每日 AI 试玩配额限制，且不占朋友配额；请求限速、并发保护及 DeepSeek 自身的账户余额与服务限制仍适用。
+- 专属权限由服务器签名验证，不接受客户端角色标记。更换 `OWNER_ACCESS_TOKEN_HASH` 会同时撤销旧专属链接和 cookie；普通邀请码不能获得专属权限。
+
 - `PLAYTEST_CODE` 和 `DEEPSEEK_API_KEY` 必须设为部署平台的服务器密钥；可另外设置独立的 `TRIAL_SIGNING_KEY`，不能填进 GitHub、前端、构建常量或分享链接。
 - 默认每个试玩浏览器每天 30 次 AI 生成，全站每天 100 次，按 UTC 日期重置；开局、剧情推进与续章都计入。失败尝试也保留预约额度，防止重复或模糊的收费请求被无限重试。RPG 装备、道具、买卖与战斗不占 AI 次数。
 - 配额是调用次数上限，不是账户金额封顶；实际费用由 DeepSeek 模型、输入长度和输出决定。可用 `PLAYTEST_USER_DAILY_LIMIT`、`PLAYTEST_GLOBAL_DAILY_LIMIT` 调整，生产端仍设置硬上限。
