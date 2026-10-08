@@ -1,4 +1,4 @@
-name: Validate RPG
+name: Validate RPG / 验证跑团
 on: [push, pull_request]
 permissions:
   contents: read

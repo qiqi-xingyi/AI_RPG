@@ -1,9 +1,9 @@
 {
   "id": "/",
-  "name": "星叙 Storybound",
-  "short_name": "星叙",
-  "description": "AI 主持的文字跑团冒险",
-  "lang": "zh-CN",
+  "name": "Storybound / 星叙",
+  "short_name": "Storybound",
+  "description": "AI Game Master RPG with custom worlds and characters / 自定义世界与角色的 AI 跑团 RPG",
+  "lang": "en",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

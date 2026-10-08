@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "通用 AI 跑团 RPG / General-purpose AI Game Master RPG with Chinese and English stories",
+  "description": "General-purpose AI Game Master RPG with Chinese and English stories / 通用 AI 跑团 RPG，支持中英文故事",
   "engines": {
     "node": ">=22.13.0"
   },

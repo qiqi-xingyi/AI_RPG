@@ -6,7 +6,7 @@ node_modules/
 .DS_Store
 coverage/
 
-# Deployment state, credentials and personal playtest outputs
+# Deployment state, credentials and personal playtest outputs / 部署状态、凭据与个人试玩输出
 .hosting/
 artifacts/
 dist/
