@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { WORLDS, ROLES, PRINCESS, demoTurn } from '../lib/catalog.mjs';
+import { WORLDS, ROLES, PRINCESS, ADVENTURER, worldFor, demoTurn } from '../lib/catalog.mjs';
 import { newSession, prepareAction, applyTurn, validateScene, publicSession, prepareContinuation, applyContinuation } from '../lib/game.mjs';
 import { createDeepSeek } from '../lib/deepseek.mjs';
 
-const setup = (extra = {}) => newSession({ name: '阿星', worldId: 'fantasy', roleId: 'wanderer', difficulty: 'balanced', ...extra });
+const setup = (extra = {}) => newSession({ name: '阿星', worldId: 'princess', roleId: 'wanderer', difficulty: 'balanced', worldPremise: '一座可以交易梦境的漂浮城市。', ...extra });
 
 test('all themes and identities create playable sessions', () => {
   for (const world of WORLDS) for (const role of ROLES) {
@@ -19,7 +19,7 @@ test('all themes and identities create playable sessions', () => {
 });
 test('princess identity persists across talents and turns and cannot be overridden by input', () => {
   for (const role of ROLES) {
-    const session = setup({ name: '露娜', roleId: role.id, protagonistId: 'someone-else', age: 1, appearance: 'wrong', title: 'wrong' });
+    const session = setup({ name: '露娜', roleId: role.id, protagonistId: PRINCESS.id, age: 1, appearance: 'wrong', title: 'wrong' });
     assert.equal(session.character.protagonistId, PRINCESS.id);
     assert.equal(session.character.name, '露娜');
     assert.equal(session.character.age, 23);
@@ -88,7 +88,7 @@ test('each demo reaches a distinct ending with actual branch consequences', () =
     endings.add(session.scene.narrative);
     assert.throws(() => prepareAction(session, { version: 5, action: '继续', skill }));
   }
-  assert.equal(endings.size, 16);
+  assert.equal(endings.size, WORLDS.length * 4);
 });
 test('zero health ends game and clears choices', () => {
   let session = setup({ difficulty: 'hard' });
@@ -205,4 +205,51 @@ test('DeepSeek continuation receives previous ending, direction and accumulated 
   assert.ok(context.memory.includes('莉亚承诺与公主同行。'));
   assert.equal(context.chapterSummaries[0].ending, '公主找回了王冠。');
   assert.equal(context.mustConclude, false);
+});
+
+test('general worlds default to custom characters without royal identity or a fixed gender', () => {
+  for (const worldId of ['fantasy', 'noir', 'cyber', 'wuxia', 'custom']) {
+    const session = newSession({ name: 'Morgan', worldId, worldPremise: 'A city where dreams can be traded.', roleId: 'scholar', difficulty: 'balanced', characterConcept: 'A wandering investigator searching for a sibling.', hp: 999, gold: 999, title: 'Forged title' });
+    assert.equal(session.character.protagonistId, ADVENTURER.id);
+    assert.equal(session.character.concept, 'A wandering investigator searching for a sibling.');
+    assert.equal(session.character.age, undefined); assert.equal(session.character.portrait, undefined);
+    assert.equal(session.character.hp, 30); assert.equal(session.character.gold, 20);
+    assert.ok(!session.scene.narrative.includes('公主'));
+    assert.ok(!session.memory.join('').includes('公主'));
+  }
+  const princess = setup(); assert.equal(princess.character.protagonistId, PRINCESS.id);
+  assert.throws(() => setup({ protagonistId: 'custom' }));
+});
+test('custom settings validate profile, language and text bounds before AI and keep protocol-safe memory', () => {
+  for (const extra of [{ language: 'ja' }, { protagonistId: 'unknown' }, { characterConcept: 'x'.repeat(501) }, { worldId: 'custom', worldPremise: '' }, { worldId: 'custom', worldPremise: 'x'.repeat(1001) }]) assert.throws(() => setup(extra));
+  const session = newSession({ name: 'Alex', worldId: 'custom', worldPremise: 'x'.repeat(1000), characterConcept: 'x'.repeat(500), language: 'en', roleId: 'guardian', difficulty: 'story' });
+  assert.equal(session.worldPremise.length, 1000); assert.equal(session.character.concept.length, 500);
+  assert.ok(session.memory.every(m => m.length <= 300));
+  const { draft } = prepareContinuation({ ...session, ended: true }, { version: 0 });
+  assert.equal(draft.language, 'en'); assert.equal(draft.worldPremise, session.worldPremise); assert.deepEqual(draft.character.concept, session.character.concept);
+});
+test('English custom campaigns send their language and world to AI and keep exhausted story text in English', async () => {
+  const session = newSession({ name: 'Alex', worldId: 'custom', worldPremise: 'A city floating above a sea of clouds.', characterConcept: 'An investigator searching for a missing sibling.', language: 'en', roleId: 'scholar', difficulty: 'hard' });
+  const opening = { title: 'A Missing Dream', chapter: 'Chapter One', location: 'Cloud Harbor', narrative: 'An archivist hands you a sealed letter.', choices: [{ label: 'Read the letter', hint: 'Look for a hidden clue.', skill: 'insight', approach: 'investigate', dc: 11 }, { label: 'Ask the archivist', hint: 'Start with a conversation.', skill: 'charm', approach: 'social', dc: 11 }], summary: 'Alex arrives in Cloud Harbor.', memory: ['Alex is an investigator.'], quest: 'Find the missing dream.', inventoryAdd: [], inventoryRemove: [], loot: [], encounter: null, ended: false };
+  let payload;
+  const generate = createDeepSeek({ apiKey: 'fake-key', fetchImpl: async (_url, options) => { payload = JSON.parse(options.body); return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(opening) } }] }); } });
+  const raw = await generate(session);
+  const context = JSON.parse(payload.messages[1].content);
+  assert.equal(context.outputLanguage, 'English'); assert.equal(context.world.premise, session.worldPremise);
+  assert.equal(context.character.concept, session.character.concept);
+  assert.match(payload.messages[0].content, /This session uses English/);
+  const { action, roll } = prepareAction(session, { version: 0, action: 'Look for the hidden clue.', skill: 'insight' }, () => 1);
+  session.character.hp = 1;
+  const next = applyTurn(session, action, roll, raw, randomUUID());
+  assert.equal(next.ended, true); assert.equal(next.language, 'en'); assert.match(next.scene.narrative, /Your strength is spent/);
+  assert.ok(!/[\u3400-\u9fff]/.test(next.scene.narrative));
+});
+test('legacy princess saves retain their original setting, identity and language across migration', () => {
+  const legacy = setup(); legacy.worldId = 'fantasy'; delete legacy.settingVersion; delete legacy.language;
+  const before = structuredClone(legacy.character);
+  assert.equal(worldFor(legacy).id, 'princess');
+  const publicSave = publicSession(legacy);
+  assert.equal(publicSave.language, 'zh'); assert.deepEqual(publicSave.character, before);
+  const { draft } = prepareContinuation({ ...legacy, ended: true }, { version: 0 });
+  assert.equal(worldFor(draft).id, 'princess'); assert.deepEqual(draft.character, before);
 });

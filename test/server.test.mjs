@@ -28,7 +28,7 @@ test('HTTP create, resume, durable save and idempotent turn', async t => {
   const f = await fixture(t);
   const config = await f.request('/api/config');
   assert.equal(config.body.aiAvailable, true);
-  assert.equal(config.body.worlds.length, 4);
+  assert.equal(config.body.worlds.length, 6);
   const created = await f.create();
   assert.equal(created.status, 201);
   const { session, token } = created.body;
@@ -242,4 +242,18 @@ test('AI unavailability never falls back to a legacy demo or advances its save',
   const before=f.store.get(legacy.id);
   const result=await f.request(`/api/sessions/${legacy.id}/turn`,{token:legacy.token,data:{version:0,action:'继续旅途',skill:'insight',requestId:randomUUID()}});
   assert.equal(result.status,503); assert.equal(called,false); assert.deepEqual(f.store.get(legacy.id),before);
+});
+
+test('HTTP custom English campaign carries background and language through AI, persistence and authenticated resume', async t => {
+  let captured;
+  const f = await fixture(t, { provider: async s => { captured = structuredClone(s); return generatedScene(s); } });
+  const created = await f.create({ worldId: 'custom', worldPremise: 'A floating city above a sea of clouds.', characterConcept: 'A traveler searching for a lost map.', language: 'en', protagonistId: 'custom' });
+  assert.equal(created.status, 201); assert.equal(captured.language, 'en');
+  assert.equal(captured.character.protagonistId, 'custom'); assert.equal(captured.worldPremise, 'A floating city above a sea of clouds.');
+  const { session, token } = created.body;
+  const saved = (await f.request('/api/sessions/' + session.id, { token })).body.session;
+  assert.equal(saved.language, 'en'); assert.equal(saved.character.concept, captured.character.concept);
+  assert.equal((await new SessionStore(f.dataDir).load()).get(session.id).worldPremise, captured.worldPremise);
+  assert.equal((await f.request('/api/sessions/' + session.id)).status, 404);
+  assert.equal((await f.create({ language: 'unsupported' })).status, 400);
 });

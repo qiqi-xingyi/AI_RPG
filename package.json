@@ -1,9 +1,9 @@
 {
   "name": "storybound-rpg",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "星叙 · DeepSeek AI 跑团文字 RPG",
+  "description": "通用 AI 跑团 RPG / General-purpose AI Game Master RPG with Chinese and English stories",
   "engines": {
     "node": ">=22.13.0"
   },
