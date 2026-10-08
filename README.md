@@ -98,6 +98,8 @@ test/                 后端规则及 HTTP 集成测试
 
 本项目以 MIT 许可证开源，仓库：<https://github.com/qiqi-xingyi/AI_RPG>。
 
+在线朋友试玩：<https://storybound-rpg-qiqi.secret-lake-6654.chatgpt.site>。需要向项目主人索取邀请码，不能使用 GitHub 源码推导邀请码或 API Key。
+
 GitHub 存放源码与空配置示例；`.env`、真实 API Key、个人 `data/` 存档、`artifacts/` 和 `.hosting/` 部署状态不会上传。发布前运行 `node scripts/check-secrets.mjs --staged`，检查即将提交的文件。
 
 在线版使用 `cloud/worker.mjs`，复用同一套公主角色、剧情、装备与战斗规则。云端 D1 保存存档和限额，不依赖本地电脑在线，也不公开本地玩家的历史。
