@@ -103,10 +103,10 @@ GitHub 存放源码与空配置示例；`.env`、真实 API Key、个人 `data/`
 在线版使用 `cloud/worker.mjs`，复用同一套公主角色、剧情、装备与战斗规则。云端 D1 保存存档和限额，不依赖本地电脑在线，也不公开本地玩家的历史。
 
 - 邀请码只用来进入试玩，绝不能把 DeepSeek Key 当作邀请码。
-- `PLAYTEST_CODE`、`TRIAL_SIGNING_KEY` 和 `DEEPSEEK_API_KEY` 必须设为部署平台的服务器密钥，不能填进 GitHub、前端、构建常量或分享链接。
+- `PLAYTEST_CODE` 和 `DEEPSEEK_API_KEY` 必须设为部署平台的服务器密钥；可另外设置独立的 `TRIAL_SIGNING_KEY`，不能填进 GitHub、前端、构建常量或分享链接。
 - 默认每个试玩浏览器每天 30 次 AI 生成，全站每天 100 次，按 UTC 日期重置；开局、剧情推进与续章都计入。失败尝试也保留预约额度，防止重复或模糊的收费请求被无限重试。RPG 装备、道具、买卖与战斗不占 AI 次数。
 - 配额是调用次数上限，不是账户金额封顶；实际费用由 DeepSeek 模型、输入长度和输出决定。可用 `PLAYTEST_USER_DAILY_LIMIT`、`PLAYTEST_GLOBAL_DAILY_LIMIT` 调整，生产端仍设置硬上限。
-- 签名 cookie 持续七天，使用 HTTPS、HttpOnly、Secure 和 SameSite。邀请码登录限速；存档还需要各自的随机凭据，不存在公开列出其他玩家存档的接口。
+- 未单独设置签名密钥时，服务器通过 HMAC 从 API Key 派生专用于试玩 cookie 的签名密钥，原 Key 不会出现在 cookie 中；更换 API Key 会让旧 cookie 失效。签名 cookie 持续七天，使用 HTTPS、HttpOnly、Secure 和 SameSite。邀请码登录限速；存档还需要各自的随机凭据，不存在公开列出其他玩家存档的接口。
 - 云端使用数据库租约防止并发推进，重试已完成的请求不会重复生成或重复发奖励。
 - 清理浏览器 cookie 会产生新的浏览器身份，全站每日限额仍生效。这是小范围邀请试玩，不是付费商业平台或实名账号系统。
 

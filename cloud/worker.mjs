@@ -16,16 +16,19 @@ function json(status, data, headers = {}) {
 }
 const safeEqual = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 function signature(value, key) { return createHmac('sha256', key).update(value).digest('base64url'); }
+function signingKey(env) {
+  return env.TRIAL_SIGNING_KEY || (env.DEEPSEEK_API_KEY ? createHmac('sha256', env.DEEPSEEK_API_KEY).update('storybound.trial.cookie.v1').digest('hex') : null);
+}
 function signedCookie(id, env) {
   const data = Buffer.from(JSON.stringify({ id, exp: Date.now() + COOKIE_AGE * 1000 })).toString('base64url');
-  return `${COOKIE}=${data}.${signature(data, env.TRIAL_SIGNING_KEY)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${COOKIE_AGE}`;
+  return `${COOKIE}=${data}.${signature(data, signingKey(env))}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${COOKIE_AGE}`;
 }
 function visitorOf(request, env) {
-  if (!env.TRIAL_SIGNING_KEY || !env.PLAYTEST_CODE) return null;
+  if (!signingKey(env) || !env.PLAYTEST_CODE) return null;
   const value = request.headers.get('cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
   if (!value || value.length > 512) return null;
   const [data, mac, extra] = value.split('.');
-  if (!data || !mac || extra || !safeEqual(mac, signature(data, env.TRIAL_SIGNING_KEY))) return null;
+  if (!data || !mac || extra || !safeEqual(mac, signature(data, signingKey(env)))) return null;
   try { const parsed = JSON.parse(Buffer.from(data, 'base64url').toString()); return /^[a-f0-9-]{36}$/.test(parsed.id) && Number.isFinite(parsed.exp) && parsed.exp > Date.now() ? parsed.id : null; }
   catch { return null; }
 }
@@ -74,11 +77,11 @@ export function createWorker(options = {}) {
           return json(200, { ...catalog(), rpg: rpgCatalog(), aiAvailable: !!env.DEEPSEEK_API_KEY, model: null,
             playtest: { required: true, authorized: !!visitor, dailyLimit: positiveInteger(env.PLAYTEST_USER_DAILY_LIMIT, 30, 100) } });
         }
-        if (!env.DB || !env.PLAYTEST_CODE || !env.TRIAL_SIGNING_KEY) throw new GameError('试玩暂未开放，请稍后再试。', 503);
+        if (!env.DB || !env.PLAYTEST_CODE || !signingKey(env)) throw new GameError('试玩暂未开放，请稍后再试。', 503);
         const store = new CloudStore(env.DB);
         if (request.method === 'POST' && path === '/api/playtest/login') {
           const address = request.headers.get('cf-connecting-ip') || 'unknown';
-          const ipHash = signature(address, env.TRIAL_SIGNING_KEY).slice(0, 24);
+          const ipHash = signature(address, signingKey(env)).slice(0, 24);
           const window = Math.floor(Date.now() / 600000);
           if (!await store.consume(`login:${ipHash}:${window}`, 10, Date.now() + 1200000)) throw new GameError('尝试太多，请十分钟后再试。', 429);
           const input = await inputOf(request);

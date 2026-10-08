@@ -93,3 +93,12 @@ test('cloud login rejects cross-origin requests and throttles guessing without s
   assert.equal((await f.request('/api/playtest/login',{data:{code:f.env.PLAYTEST_CODE}})).status,429);
   assert.equal(f.calls(),0);
 });
+
+test('cloud trial safely derives cookie signing when only the provided API secret is configured',async t=>{
+  const f=fixture(t,{TRIAL_SIGNING_KEY:undefined});
+  const cookie=await f.login();
+  assert.ok(!cookie.includes(f.env.DEEPSEEK_API_KEY));
+  assert.equal((await f.request('/api/config',{cookie})).body.playtest.authorized,true);
+  f.env.DEEPSEEK_API_KEY='rotated-test-api-key';
+  assert.equal((await f.request('/api/config',{cookie})).body.playtest.authorized,false);
+});
