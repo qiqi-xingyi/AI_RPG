@@ -45,7 +45,7 @@ async function api(path, options = {}) {
   catch (error) { throw new Error(error.name === 'TimeoutError' ? '等待回应超时。请重试；重复提交不会重复推进回合。' : '连接中断，请检查网络。你的已完成回合仍保存在服务器。'); }
   let result;
   try { result = await response.json(); } catch { throw new Error('服务器回应异常，请稍后重试。'); }
-  if (!response.ok) { const error = new Error(result.error || '暂时无法完成，请重试。'); error.status = response.status; throw error; }
+  if (!response.ok) { if (result.code === 'PLAYTEST_LOGIN_REQUIRED' && state.config?.playtest) state.config.playtest.authorized = false; const error = new Error(result.error || '暂时无法完成，请重试。'); error.status = response.status; throw error; }
   return result;
 }
 function persist() {
@@ -169,6 +169,11 @@ function story() {
 }
 function render() {
   if (!state.config) return;
+  if (state.config.playtest?.required && !state.config.playtest.authorized) {
+    document.title = '星叙 · 朋友试玩';
+    app.innerHTML = `<main class="playtest-gate"><section class="playtest-card"><img src="${esc(state.config.protagonist.portrait)}" alt="月光花园中的公主"><div class="playtest-copy"><span class="playtest-eyebrow">✧ 星叙 · 朋友试玩</span><h1>你的童话，<br>从月光下开始。</h1><p>输入朋友分享的邀请码，陪公主踏上一段由你决定的冒险。</p><form id="playtest-form"><label for="playtest-code">试玩邀请码</label><input id="playtest-code" name="code" class="text-input" maxlength="80" required autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="输入邀请码"><p class="form-error" id="playtest-error" role="alert"></p><button class="primary-button" type="submit">进入冒险大厅 ${icon('arrow')}</button></form><small>进度自动保存。每个试玩浏览器每天有 ${Number(state.config.playtest.dailyLimit)} 次 AI 生成机会，明天可以接着玩。</small></div></section></main>`;
+    return;
+  }
   app.innerHTML = `<div class="app-shell">${sidebar()}<main class="main">${header()}${state.screen === 'story' && state.session ? story() : home()}</main></div>`;
   document.title = state.screen === 'story' ? `${state.session.scene.title} · 星叙` : '星叙 Storybound · 你的故事，由你书写';
 }
@@ -286,6 +291,15 @@ document.addEventListener('click', event => {
   if (action === 'export') exportStory();
 });
 document.addEventListener('submit', async event => {
+  if (event.target.id === 'playtest-form') {
+    event.preventDefault();
+    if (state.busy) return;
+    const form = event.target, button = form.querySelector('button[type="submit"]');
+    state.busy = true; button.disabled = true;
+    try { await api('/api/playtest/login', {method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))}); state.config = await api('/api/config'); render(); }
+    catch (error) { const message = $('#playtest-error'); if (message) message.textContent = error.message; }
+    finally { state.busy = false; button.disabled = false; }
+  }
   if (event.target.id === 'action-form') { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (!data.action.trim()) return toast('先写下你想尝试的行动。'); await turn(data); }
   if (event.target.id === 'continue-form') { event.preventDefault(); await turn(Object.fromEntries(new FormData(event.target)), 'continue'); }
   if (event.target.id === 'create-form') {
