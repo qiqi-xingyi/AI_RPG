@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+data/
+node_modules/
+.DS_Store
+coverage/
+
+# Deployment state, credentials and personal playtest outputs
+.hosting/
+artifacts/
+dist/
+.wrangler/
+.dev.vars
+.dev.vars.*

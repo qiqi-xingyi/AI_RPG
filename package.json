@@ -1,0 +1,21 @@
+{
+  "name": "storybound-rpg",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "星叙 · DeepSeek AI 跑团文字 RPG",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test",
+    "check": "node --check server.mjs && node --check public/app.js && node --test"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.11",
+    "drizzle-orm": "^0.45.3",
+    "esbuild": "^0.28.2"
+  }
+}
